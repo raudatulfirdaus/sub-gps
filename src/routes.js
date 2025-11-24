@@ -210,10 +210,41 @@ router.post('/master-data/update', async (req, res) => {
 
 // Service Logs
 router.get('/service-logs', async (req, res) => {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+    const search = req.query.q || '';
+
     try {
         const devices = await db.all('SELECT deviceId, name FROM devices ORDER BY name');
-        const logs = await db.all('SELECT * FROM service_logs ORDER BY startDate DESC');
-        res.render('service-logs', { devices, logs });
+
+        let sql = 'SELECT * FROM service_logs';
+        let countSql = 'SELECT COUNT(*) as count FROM service_logs';
+        let params = [];
+
+        if (search) {
+            const searchTerm = `%${search}%`;
+            sql += ' WHERE deviceId LIKE ? OR description LIKE ? OR repairType LIKE ?';
+            countSql += ' WHERE deviceId LIKE ? OR description LIKE ? OR repairType LIKE ?';
+            params = [searchTerm, searchTerm, searchTerm];
+        }
+
+        sql += ' ORDER BY startDate DESC LIMIT ? OFFSET ?';
+        const queryParams = [...params, limit, offset];
+
+        const logs = await db.all(sql, queryParams);
+        const countResult = await db.all(countSql, params);
+        const totalCount = countResult[0].count;
+        const totalPages = Math.ceil(totalCount / limit);
+
+        res.render('service-logs', {
+            devices,
+            logs,
+            currentPage: page,
+            totalPages,
+            search,
+            totalCount
+        });
     } catch (err) {
         console.error(err);
         res.status(500).send("Database Error");
@@ -271,6 +302,82 @@ router.post('/service-logs/delete', async (req, res) => {
     } catch (err) {
         console.error(err);
         res.status(500).send("Error deleting log");
+    }
+});
+
+// Service Logs Excel Template Download
+router.get('/service-logs/template', (req, res) => {
+    const wb = xlsx.utils.book_new();
+    const wsData = [
+        ['Device ID', 'Repair Type', 'Description', 'Start Date', 'End Date'],
+        ['868738070001157', 'Hardware', 'GPS module replacement', '2024-11-01', '2024-11-05'],
+        ['868738070001158', 'Firmware', 'Firmware update', '2024-11-10', ''],
+        ['868738070001159', 'Battery', 'Battery replacement - ONGOING', '2024-11-15', ''],
+        ['', '', 'NOTE: Leave End Date blank for ongoing service', '', '']
+    ];
+    const ws = xlsx.utils.aoa_to_sheet(wsData);
+    xlsx.utils.book_append_sheet(wb, ws, 'Service Logs');
+    const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    res.setHeader('Content-Disposition', 'attachment; filename="service_logs_template.xlsx"');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buffer);
+});
+
+// Service Logs Excel Upload
+router.post('/service-logs/upload', upload.single('file'), async (req, res) => {
+    if (!req.file) {
+        return res.status(400).send('No file uploaded.');
+    }
+
+    try {
+        const workbook = xlsx.readFile(req.file.path);
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const data = xlsx.utils.sheet_to_json(sheet);
+
+        // Convert Excel serial dates
+        const convertExcelDate = (excelDate) => {
+            if (!excelDate) return null;
+            if (typeof excelDate === 'string' && excelDate.includes('-')) {
+                return excelDate;
+            }
+            if (typeof excelDate === 'number') {
+                const date = new Date((excelDate - 25569) * 86400 * 1000);
+                const year = date.getFullYear();
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+                return `${year}-${month}-${day}`;
+            }
+            return excelDate;
+        };
+
+        for (const row of data) {
+            if (row['Device ID'] || row['deviceId']) {
+                let deviceId = String(row['Device ID'] || row['deviceId']).trim();
+                if (deviceId.endsWith('.0')) {
+                    deviceId = deviceId.slice(0, -2);
+                }
+
+                const repairType = row['Repair Type'] || row['repairType'] || 'Other';
+                const description = row['Description'] || row['description'] || '';
+                const startDate = convertExcelDate(row['Start Date'] || row['startDate']);
+                const endDate = convertExcelDate(row['End Date'] || row['endDate']);
+
+                await db.run(
+                    'INSERT INTO service_logs (deviceId, repairType, description, startDate, endDate) VALUES (?, ?, ?, ?, ?)',
+                    [deviceId, repairType, description, startDate, endDate]
+                );
+            }
+        }
+
+        // Cleanup uploaded file
+        fs.unlinkSync(req.file.path);
+
+        res.redirect('/service-logs');
+    } catch (err) {
+        console.error(err);
+        res.status(500).send("Error processing file: " + err.message);
     }
 });
 
