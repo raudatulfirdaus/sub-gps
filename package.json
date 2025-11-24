@@ -1,0 +1,30 @@
+{
+  "name": "sub-gps",
+  "version": "1.0.0",
+  "description": "Rancangan Sistem Rekapitulasi & Rekonsiliasi GPS (Edisi Per Divisi & Masa Kontrak)",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/raudatulfirdaus/sub-gps.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/raudatulfirdaus/sub-gps/issues"
+  },
+  "homepage": "https://github.com/raudatulfirdaus/sub-gps#readme",
+  "dependencies": {
+    "body-parser": "^2.2.0",
+    "date-fns": "^4.1.0",
+    "ejs": "^3.1.10",
+    "express": "^5.1.0",
+    "multer": "^2.0.2",
+    "sqlite3": "^5.1.7",
+    "xlsx": "^0.18.5"
+  }
+}

@@ -1,0 +1,89 @@
+<%- include('header') %>
+
+    <h1 class="text-3xl font-bold text-gray-800 mb-8">Reconciliation Report</h1>
+
+    <div class="bg-white p-6 rounded-lg shadow-sm mb-8 max-w-lg">
+        <form action="/report" method="GET" class="flex gap-4 items-end">
+            <div class="flex-1">
+                <label class="block text-gray-700 font-medium mb-2">Report Month</label>
+                <input type="month" name="month" value="<%= reportMonth %>" required
+                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition">
+            </div>
+            <button type="submit"
+                class="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-6 rounded transition duration-300 h-[42px]">Generate</button>
+        </form>
+    </div>
+
+    <% Object.keys(summary).forEach(division=> { %>
+        <div class="bg-white p-8 rounded-lg shadow-sm mb-8">
+            <div class="flex justify-between items-center mb-6 border-b pb-4">
+                <h2 class="text-xl font-bold text-gray-800">Division: <%= division %>
+                </h2>
+                <div class="text-right">
+                    <span class="block text-gray-600">Total Devices: <span class="font-semibold">
+                            <%= summary[division].totalDevices %>
+                        </span></span>
+                    <span class="block text-blue-600 font-bold">Billable: <%= summary[division].billableCount %></span>
+                </div>
+            </div>
+
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="bg-gray-100 text-gray-600 uppercase text-sm leading-normal">
+                            <th class="py-3 px-6">Device ID</th>
+                            <th class="py-3 px-6">Unit Name</th>
+                            <th class="py-3 px-6">Contract End</th>
+                            <th class="py-3 px-6">Status</th>
+                            <th class="py-3 px-6">Note</th>
+                            <th class="py-3 px-6 text-right">Cost</th>
+                        </tr>
+                    </thead>
+                    <tbody class="text-gray-600 text-sm font-light">
+                        <% summary[division].items.forEach(item=> { %>
+                            <tr class="border-b border-gray-200 hover:bg-gray-50">
+                                <td class="py-3 px-6 font-medium">
+                                    <%= item.device.deviceId %>
+                                </td>
+                                <td class="py-3 px-6">
+                                    <%= item.device.name %>
+                                </td>
+                                <td class="py-3 px-6">
+                                    <%= item.device.subEndDate %>
+                                </td>
+                                <td class="py-3 px-6">
+                                    <span class="py-1 px-3 rounded-full text-xs
+                                    <%= item.status === 'ACTIVE' || item.status === 'BILLABLE' ? 'bg-blue-200 text-blue-600' : '' %>
+                                    <%= item.status === 'EXPIRED' ? 'bg-red-200 text-red-600' : '' %>
+                                    <%= item.status === 'PENDING' ? 'bg-yellow-200 text-yellow-600' : '' %>
+                                    <%= item.status === 'SERVICE' ? 'bg-purple-200 text-purple-600' : '' %>
+                                ">
+                                        <%= item.status %>
+                                    </span>
+                                </td>
+                                <td class="py-3 px-6">
+                                    <%= item.note %>
+                                </td>
+                                <td class="py-3 px-6 text-right font-medium">Rp <%= item.cost.toLocaleString('id-ID') %>
+                                </td>
+                            </tr>
+                            <% }) %>
+                                <tr class="bg-gray-50 font-bold text-gray-800">
+                                    <td colspan="5" class="py-4 px-6 text-right">Subtotal:</td>
+                                    <td class="py-4 px-6 text-right text-blue-600">Rp <%=
+                                            summary[division].totalCost.toLocaleString('id-ID') %>
+                                    </td>
+                                </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <% }) %>
+
+            <% if (Object.keys(summary).length===0) { %>
+                <div class="bg-white p-12 rounded-lg shadow-sm text-center">
+                    <p class="text-gray-500 text-lg">No data available for this month.</p>
+                </div>
+                <% } %>
+
+                    <%- include('footer') %>
