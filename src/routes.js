@@ -373,4 +373,254 @@ router.get('/report/export', async (req, res) => {
     }
 });
 
+// Vendor Invoice Template Download
+router.get('/report/vendor-template', (req, res) => {
+    const wb = xlsx.utils.book_new();
+    const wsData = [
+        ['MONTH', 'PLAT NO'],
+        ['2024-11', '868738070001157'],
+        ['2024-11', '868738070001158'],
+        ['2024-11', '868738070001159']
+    ];
+    const ws = xlsx.utils.aoa_to_sheet(wsData);
+    xlsx.utils.book_append_sheet(wb, ws, 'Vendor Invoice');
+    const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    res.setHeader('Content-Disposition', 'attachment; filename="vendor_invoice_template.xlsx"');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buffer);
+});
+
+// Upload Vendor Invoice
+router.post('/report/upload-vendor', upload.single('file'), async (req, res) => {
+    if (!req.file) {
+        return res.status(400).send('No file uploaded.');
+    }
+
+    const { month } = req.body;
+    if (!month) {
+        return res.status(400).send('Report month is required.');
+    }
+
+    try {
+        const workbook = xlsx.readFile(req.file.path);
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const data = xlsx.utils.sheet_to_json(sheet);
+
+        // Clear existing vendor data for this month
+        await db.run('DELETE FROM vendor_invoices WHERE reportMonth = ?', [month]);
+
+        // Insert vendor data
+        const uploadDate = new Date().toISOString();
+        for (const row of data) {
+            let deviceId = row['PLAT NO'] || row['PLAT_NO'] || row.deviceId;
+            if (deviceId) {
+                // Sanitize Device ID
+                deviceId = String(deviceId).trim();
+                if (deviceId.endsWith('.0')) {
+                    deviceId = deviceId.slice(0, -2);
+                }
+
+                await db.run(
+                    `INSERT INTO vendor_invoices (deviceId, reportMonth, uploadDate) 
+                     VALUES (?, ?, ?)`,
+                    [deviceId, month, uploadDate]
+                );
+            }
+        }
+
+        // Cleanup uploaded file
+        fs.unlinkSync(req.file.path);
+
+        res.redirect(`/report/reconcile?month=${month}`);
+    } catch (err) {
+        console.error(err);
+        res.status(500).send("Error processing vendor file: " + err.message);
+    }
+});
+
+// Reconciliation Report
+router.get('/report/reconcile', async (req, res) => {
+    const { month } = req.query;
+    const reportMonth = month || new Date().toISOString().slice(0, 7);
+
+    try {
+        // Get all devices and logs
+        const devices = await db.all('SELECT * FROM devices');
+        const logs = await db.all('SELECT * FROM service_logs');
+        const vendorData = await db.all('SELECT * FROM vendor_invoices WHERE reportMonth = ?', [reportMonth]);
+
+        // Calculate internal status for all devices
+        const internalData = devices.map(device => {
+            const deviceLogs = logs.filter(l => l.deviceId === device.deviceId);
+            const statusResult = logic.calculateStatus(device, reportMonth, deviceLogs);
+            return {
+                device: device,
+                ...statusResult
+            };
+        });
+
+        // Create reconciliation results
+        const reconciliation = [];
+        const vendorDeviceIds = new Set(vendorData.map(v => v.deviceId));
+
+        // Process vendor billed devices
+        vendorData.forEach(vendorItem => {
+            const internalItem = internalData.find(d => d.device.deviceId === vendorItem.deviceId);
+
+            if (internalItem) {
+                const shouldBeBilled = internalItem.status === 'BILLABLE';
+                const vendorBilling = 'BILLED';
+                const ourRecommendation = shouldBeBilled ? 'BILLED' : 'UNBILLED';
+                const discrepancy = shouldBeBilled ? 'MATCH' : 'DISPUTE';
+
+                reconciliation.push({
+                    deviceId: vendorItem.deviceId,
+                    device: internalItem.device,
+                    vendorStatus: vendorBilling,
+                    internalStatus: internalItem.status,
+                    ourRecommendation: ourRecommendation,
+                    discrepancy: discrepancy,
+                    reason: internalItem.note,
+                    cost: internalItem.cost
+                });
+            } else {
+                // Vendor billing device not in our master data
+                reconciliation.push({
+                    deviceId: vendorItem.deviceId,
+                    device: { deviceId: vendorItem.deviceId, name: 'Unknown', division: vendorItem.division },
+                    vendorStatus: 'BILLED',
+                    internalStatus: 'NOT_IN_MASTER',
+                    ourRecommendation: 'UNBILLED',
+                    discrepancy: 'DISPUTE',
+                    reason: 'Device not in master data',
+                    cost: 0
+                });
+            }
+        });
+
+        // Check for devices we expect to bill but vendor doesn't
+        internalData.forEach(internalItem => {
+            if (internalItem.status === 'BILLABLE' && !vendorDeviceIds.has(internalItem.device.deviceId)) {
+                reconciliation.push({
+                    deviceId: internalItem.device.deviceId,
+                    device: internalItem.device,
+                    vendorStatus: 'NOT_BILLED',
+                    internalStatus: internalItem.status,
+                    ourRecommendation: 'BILLED',
+                    discrepancy: 'MISSING',
+                    reason: 'Should be billed but vendor not billing',
+                    cost: internalItem.cost
+                });
+            }
+        });
+
+        // Calculate summary
+        const summary = {
+            total: reconciliation.length,
+            matched: reconciliation.filter(r => r.discrepancy === 'MATCH').length,
+            disputes: reconciliation.filter(r => r.discrepancy === 'DISPUTE').length,
+            missing: reconciliation.filter(r => r.discrepancy === 'MISSING').length,
+            vendorTotal: vendorData.length,
+            ourBillableTotal: internalData.filter(d => d.status === 'BILLABLE').length
+        };
+
+        res.render('reconcile', { reconciliation, summary, reportMonth, hasVendorData: vendorData.length > 0 });
+    } catch (err) {
+        console.error("Reconciliation Error:", err);
+        res.status(500).send("Error generating reconciliation: " + err.message);
+    }
+});
+
+// Export Reconciliation to Excel
+router.get('/report/reconcile/export', async (req, res) => {
+    const { month } = req.query;
+    const reportMonth = month || new Date().toISOString().slice(0, 7);
+
+    try {
+        // Get all devices and logs
+        const devices = await db.all('SELECT * FROM devices');
+        const logs = await db.all('SELECT * FROM service_logs');
+        const vendorData = await db.all('SELECT * FROM vendor_invoices WHERE reportMonth = ?', [reportMonth]);
+
+        // Calculate internal status for all devices
+        const internalData = devices.map(device => {
+            const deviceLogs = logs.filter(l => l.deviceId === device.deviceId);
+            const statusResult = logic.calculateStatus(device, reportMonth, deviceLogs);
+            return {
+                device: device,
+                ...statusResult
+            };
+        });
+
+        // Create reconciliation results
+        const reconciliation = [];
+        const vendorDeviceIds = new Set(vendorData.map(v => v.deviceId));
+
+        vendorData.forEach(vendorItem => {
+            const internalItem = internalData.find(d => d.device.deviceId === vendorItem.deviceId);
+
+            if (internalItem) {
+                const shouldBeBilled = internalItem.status === 'BILLABLE';
+                reconciliation.push({
+                    deviceId: vendorItem.deviceId,
+                    name: internalItem.device.name,
+                    division: internalItem.device.division,
+                    vendorStatus: 'BILLED',
+                    internalStatus: internalItem.status,
+                    ourRecommendation: shouldBeBilled ? 'BILLED' : 'UNBILLED',
+                    discrepancy: shouldBeBilled ? 'MATCH' : 'DISPUTE',
+                    reason: internalItem.note
+                });
+            } else {
+                reconciliation.push({
+                    deviceId: vendorItem.deviceId,
+                    name: 'Unknown',
+                    division: vendorItem.division,
+                    vendorStatus: 'BILLED',
+                    internalStatus: 'NOT_IN_MASTER',
+                    ourRecommendation: 'UNBILLED',
+                    discrepancy: 'DISPUTE',
+                    reason: 'Device not in master data'
+                });
+            }
+        });
+
+        // Create Excel
+        const wb = xlsx.utils.book_new();
+        const excelData = [];
+
+        excelData.push(['Vendor Reconciliation Report']);
+        excelData.push(['Report Month:', reportMonth]);
+        excelData.push([]);
+        excelData.push(['Device ID', 'Unit Name', 'Division', 'Vendor Status', 'Internal Status', 'Our Recommendation', 'Discrepancy', 'Reason']);
+
+        reconciliation.forEach(item => {
+            excelData.push([
+                item.deviceId,
+                item.name,
+                item.division,
+                item.vendorStatus,
+                item.internalStatus,
+                item.ourRecommendation,
+                item.discrepancy,
+                item.reason
+            ]);
+        });
+
+        const ws = xlsx.utils.aoa_to_sheet(excelData);
+        xlsx.utils.book_append_sheet(wb, ws, 'Reconciliation');
+
+        const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+        res.setHeader('Content-Disposition', `attachment; filename="vendor_reconciliation_${reportMonth}.xlsx"`);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.send(buffer);
+    } catch (err) {
+        console.error("Export Error:", err);
+        res.status(500).send("Error exporting reconciliation: " + err.message);
+    }
+});
+
 module.exports = router;

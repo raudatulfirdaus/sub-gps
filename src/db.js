@@ -35,6 +35,16 @@ function initDb() {
             repairType TEXT,
             FOREIGN KEY(deviceId) REFERENCES devices(deviceId)
         )`);
+
+        db.run(`CREATE TABLE IF NOT EXISTS vendor_invoices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        deviceId TEXT,
+        reportMonth TEXT,
+        customers TEXT,
+        division TEXT,
+        type TEXT,
+        uploadDate TEXT
+    )`);
     });
 }
 
