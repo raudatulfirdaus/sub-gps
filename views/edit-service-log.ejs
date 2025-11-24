@@ -1,0 +1,57 @@
+<%- include('header') %>
+
+    <h1 class="text-3xl font-bold text-gray-800 mb-8">Edit Service Log</h1>
+
+    <div class="bg-white p-8 rounded-lg shadow-sm mb-8">
+        <form action="/service-logs/update" method="POST">
+            <input type="hidden" name="id" value="<%= log.id %>">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                <div class="form-group">
+                    <label class="block text-gray-700 font-medium mb-2">Device</label>
+                    <select name="deviceId" required
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition">
+                        <% devices.forEach(device=> { %>
+                            <option value="<%= device.deviceId %>" <%=log.deviceId===device.deviceId ? 'selected' : ''
+                                %>><%= device.name %> (<%= device.deviceId %>)</option>
+                            <% }) %>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="block text-gray-700 font-medium mb-2">Repair Type</label>
+                    <select name="repairType" required
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition">
+                        <option value="Hardware" <%=log.repairType==='Hardware' ? 'selected' : '' %>>Hardware</option>
+                        <option value="Software" <%=log.repairType==='Software' ? 'selected' : '' %>>Software</option>
+                        <option value="Network" <%=log.repairType==='Network' ? 'selected' : '' %>>Network</option>
+                        <option value="Battery" <%=log.repairType==='Battery' ? 'selected' : '' %>>Battery</option>
+                        <option value="Antenna" <%=log.repairType==='Antenna' ? 'selected' : '' %>>Antenna</option>
+                        <option value="Other" <%=log.repairType==='Other' ? 'selected' : '' %>>Other</option>
+                    </select>
+                </div>
+                <div class="form-group md:col-span-2">
+                    <label class="block text-gray-700 font-medium mb-2">Description</label>
+                    <input type="text" name="description" value="<%= log.description %>" required
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition">
+                </div>
+                <div class="form-group">
+                    <label class="block text-gray-700 font-medium mb-2">Start Date</label>
+                    <input type="date" name="startDate" value="<%= log.startDate %>" required
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition">
+                </div>
+                <div class="form-group">
+                    <label class="block text-gray-700 font-medium mb-2">End Date (Leave blank if ongoing)</label>
+                    <input type="date" name="endDate" value="<%= log.endDate || '' %>"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition">
+                </div>
+            </div>
+            <div class="flex gap-4">
+                <button type="submit"
+                    class="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-6 rounded transition duration-300">Update
+                    Log</button>
+                <a href="/service-logs"
+                    class="bg-gray-500 hover:bg-gray-600 text-white font-semibold py-2 px-6 rounded transition duration-300">Cancel</a>
+            </div>
+        </form>
+    </div>
+
+    <%- include('footer') %>

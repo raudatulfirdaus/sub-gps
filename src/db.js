@@ -32,6 +32,7 @@ function initDb() {
             startDate TEXT,
             endDate TEXT,
             description TEXT,
+            repairType TEXT,
             FOREIGN KEY(deviceId) REFERENCES devices(deviceId)
         )`);
     });

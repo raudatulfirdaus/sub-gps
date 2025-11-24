@@ -26,9 +26,38 @@ router.get('/', async (req, res) => {
 
 // Master Data
 router.get('/master-data', async (req, res) => {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+    const search = req.query.q || '';
+
     try {
-        const devices = await db.all('SELECT * FROM devices');
-        res.render('master-data', { devices });
+        let sql = 'SELECT * FROM devices';
+        let countSql = 'SELECT COUNT(*) as count FROM devices';
+        let params = [];
+
+        if (search) {
+            const searchTerm = `%${search}%`;
+            sql += ' WHERE deviceId LIKE ? OR name LIKE ? OR division LIKE ?';
+            countSql += ' WHERE deviceId LIKE ? OR name LIKE ? OR division LIKE ?';
+            params = [searchTerm, searchTerm, searchTerm];
+        }
+
+        sql += ' LIMIT ? OFFSET ?';
+        const queryParams = [...params, limit, offset];
+
+        const devices = await db.all(sql, queryParams);
+        const countResult = await db.all(countSql, params);
+        const totalCount = countResult[0].count;
+        const totalPages = Math.ceil(totalCount / limit);
+
+        res.render('master-data', {
+            devices,
+            currentPage: page,
+            totalPages,
+            search,
+            totalCount
+        });
     } catch (err) {
         console.error(err);
         res.status(500).send("Database Error");
@@ -98,6 +127,24 @@ router.post('/master-data/upload', upload.single('file'), async (req, res) => {
                     deviceId = deviceId.slice(0, -2);
                 }
 
+                // Convert Excel serial dates to YYYY-MM-DD format
+                const convertExcelDate = (excelDate) => {
+                    if (!excelDate) return null;
+                    // If it's already a string in date format, return it
+                    if (typeof excelDate === 'string' && excelDate.includes('-')) {
+                        return excelDate;
+                    }
+                    // If it's a number (Excel serial date)
+                    if (typeof excelDate === 'number') {
+                        const date = new Date((excelDate - 25569) * 86400 * 1000);
+                        const year = date.getFullYear();
+                        const month = String(date.getMonth() + 1).padStart(2, '0');
+                        const day = String(date.getDate()).padStart(2, '0');
+                        return `${year}-${month}-${day}`;
+                    }
+                    return excelDate;
+                };
+
                 await db.run(
                     `INSERT OR REPLACE INTO devices (deviceId, name, branch, division, type, subStartDate, subEndDate, status) 
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -107,8 +154,8 @@ router.post('/master-data/upload', upload.single('file'), async (req, res) => {
                         row.branch || '',
                         row.division || '',
                         row.type || 'GPS Only',
-                        row.subStartDate,
-                        row.subEndDate,
+                        convertExcelDate(row.subStartDate),
+                        convertExcelDate(row.subEndDate),
                         row.status || 'Active'
                     ]
                 );
@@ -164,9 +211,9 @@ router.post('/master-data/update', async (req, res) => {
 // Service Logs
 router.get('/service-logs', async (req, res) => {
     try {
+        const devices = await db.all('SELECT deviceId, name FROM devices ORDER BY name');
         const logs = await db.all('SELECT * FROM service_logs ORDER BY startDate DESC');
-        const devices = await db.all('SELECT deviceId, name FROM devices');
-        res.render('service-logs', { logs, devices });
+        res.render('service-logs', { devices, logs });
     } catch (err) {
         console.error(err);
         res.status(500).send("Database Error");
@@ -174,12 +221,11 @@ router.get('/service-logs', async (req, res) => {
 });
 
 router.post('/service-logs/add', async (req, res) => {
-    const { deviceId, startDate, endDate, description } = req.body;
+    const { deviceId, description, repairType, startDate, endDate } = req.body;
     try {
         await db.run(
-            `INSERT INTO service_logs (deviceId, startDate, endDate, description) 
-             VALUES (?, ?, ?, ?)`,
-            [deviceId, startDate, endDate, description]
+            'INSERT INTO service_logs (deviceId, description, repairType, startDate, endDate) VALUES (?, ?, ?, ?, ?)',
+            [deviceId, description, repairType, startDate, endDate]
         );
         res.redirect('/service-logs');
     } catch (err) {
@@ -188,30 +234,142 @@ router.post('/service-logs/add', async (req, res) => {
     }
 });
 
+router.get('/service-logs/edit/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const log = await db.get('SELECT * FROM service_logs WHERE id = ?', [id]);
+        const devices = await db.all('SELECT deviceId, name FROM devices ORDER BY name');
+        if (!log) {
+            return res.status(404).send("Log not found");
+        }
+        res.render('edit-service-log', { log, devices });
+    } catch (err) {
+        console.error(err);
+        res.status(500).send("Database Error");
+    }
+});
+
+router.post('/service-logs/update', async (req, res) => {
+    const { id, deviceId, description, repairType, startDate, endDate } = req.body;
+    try {
+        await db.run(
+            'UPDATE service_logs SET deviceId = ?, description = ?, repairType = ?, startDate = ?, endDate = ? WHERE id = ?',
+            [deviceId, description, repairType, startDate, endDate, id]
+        );
+        res.redirect('/service-logs');
+    } catch (err) {
+        console.error(err);
+        res.status(500).send("Error updating log");
+    }
+});
+
+router.post('/service-logs/delete', async (req, res) => {
+    const { id } = req.body;
+    try {
+        await db.run('DELETE FROM service_logs WHERE id = ?', [id]);
+        res.redirect('/service-logs');
+    } catch (err) {
+        console.error(err);
+        res.status(500).send("Error deleting log");
+    }
+});
+
 // Report
 router.get('/report', async (req, res) => {
-    const reportMonth = req.query.month || new Date().toISOString().slice(0, 7); // Default current month YYYY-MM
+    const { month } = req.query;
+    const reportMonth = month || new Date().toISOString().slice(0, 7); // YYYY-MM
+
+    try {
+        // Fetch all devices and logs
+        const devices = await db.all('SELECT * FROM devices');
+        const logs = await db.all('SELECT * FROM service_logs');
+
+        // Calculate status for each device
+        const reportData = devices.map(device => {
+            const deviceLogs = logs.filter(l => l.deviceId === device.deviceId);
+            const statusResult = logic.calculateStatus(device, reportMonth, deviceLogs);
+            return {
+                device: device,
+                ...statusResult
+            };
+        });
+
+        // Aggregate by division
+        const summary = logic.aggregateByDivision(reportData);
+
+        res.render('report', { summary, reportMonth });
+    } catch (err) {
+        console.error("Report Generation Error:", err);
+        res.status(500).send("Error generating report: " + err.message);
+    }
+});
+
+// Export Report to Excel
+router.get('/report/export', async (req, res) => {
+    const { month } = req.query;
+    const reportMonth = month || new Date().toISOString().slice(0, 7);
 
     try {
         const devices = await db.all('SELECT * FROM devices');
         const logs = await db.all('SELECT * FROM service_logs');
 
-        // Calculate status for all devices
-        const results = devices.map(device => {
+        const reportData = devices.map(device => {
             const deviceLogs = logs.filter(l => l.deviceId === device.deviceId);
             const statusResult = logic.calculateStatus(device, reportMonth, deviceLogs);
             return {
-                device,
+                device: device,
                 ...statusResult
             };
         });
 
-        const summary = logic.aggregateByDivision(results);
+        const summary = logic.aggregateByDivision(reportData);
 
-        res.render('report', { reportMonth, summary });
+        // Create Excel workbook
+        const wb = xlsx.utils.book_new();
+
+        // Create data for Excel
+        const excelData = [];
+        excelData.push(['GPS Reconciliation Report']);
+        excelData.push(['Report Month:', reportMonth]);
+        excelData.push([]);
+
+        Object.keys(summary).forEach(division => {
+            excelData.push([`Division: ${division}`]);
+            excelData.push(['Total Devices:', summary[division].totalDevices, 'Billable:', summary[division].billableCount, 'Total Cost:', summary[division].totalCost]);
+            excelData.push([]);
+            excelData.push(['Device ID', 'Unit Name', 'Branch', 'Division', 'Type', 'Contract Start', 'Contract End', 'Status', 'Note', 'Cost']);
+
+            summary[division].items.forEach(item => {
+                excelData.push([
+                    item.device.deviceId,
+                    item.device.name,
+                    item.device.branch,
+                    item.device.division,
+                    item.device.type,
+                    item.device.subStartDate,
+                    item.device.subEndDate,
+                    item.status,
+                    item.note,
+                    item.cost
+                ]);
+            });
+
+            excelData.push([]);
+            excelData.push(['Subtotal:', '', '', '', '', '', '', '', '', summary[division].totalCost]);
+            excelData.push([]);
+        });
+
+        const ws = xlsx.utils.aoa_to_sheet(excelData);
+        xlsx.utils.book_append_sheet(wb, ws, 'Report');
+
+        const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+        res.setHeader('Content-Disposition', `attachment; filename="reconciliation_report_${reportMonth}.xlsx"`);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.send(buffer);
     } catch (err) {
-        console.error(err);
-        res.status(500).send("Database Error");
+        console.error("Export Error:", err);
+        res.status(500).send("Error exporting report: " + err.message);
     }
 });
 

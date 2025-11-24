@@ -8,6 +8,11 @@ const { parseISO, isBefore, isAfter, startOfMonth, endOfMonth, isWithinInterval,
  * @returns {Object} - { status: string, cost: number, note: string }
  */
 function calculateStatus(device, reportMonth, serviceLogs) {
+    // Validate required date fields
+    if (!device.subStartDate || !device.subEndDate) {
+        return { status: 'ERROR', cost: 0, note: 'Missing contract dates' };
+    }
+
     const reportDate = parseISO(reportMonth + '-01'); // First day of report month
     const reportMonthStart = startOfMonth(reportDate);
     const reportMonthEnd = endOfMonth(reportDate);
@@ -35,6 +40,9 @@ function calculateStatus(device, reportMonth, serviceLogs) {
     let isFullService = false;
 
     for (const log of serviceLogs) {
+        // Skip logs without start date
+        if (!log.startDate) continue;
+
         const srvStart = parseISO(log.startDate);
         const srvEnd = log.endDate ? parseISO(log.endDate) : new Date(); // If ongoing, assume until now/future
 
